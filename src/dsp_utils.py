@@ -1,38 +1,38 @@
-"""
-DSP utilities: simple VAD and truncation helpers for short-duration experiments.
-"""
-
-from typing import Tuple
+import librosa
 import numpy as np
+import pathlib as path
+
+def extract_longest_word(wav_path, wrd_path):
+    max_duration_samples = 0
+    best_start = 0
+    best_end =0
+    wake_word= ""
+
+    with open(wrd_path, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts)!=3: continue
+
+            start_sample = parts[0]
+            end_sample = parts[1]
+            word = parts[2]
+
+            duration = int(end_sample) - int(start_sample)
+
+            if (duration > max_duration_samples):
+                max_duration_samples = duration
+                best_start = int(start_sample)
+                best_end = int(end_sample)
+                wake_word = word
 
 
-def energy_vad(y: np.ndarray, frame_length: int, hop_length: int, thresh: float = 0.1) -> np.ndarray:
-    """Simple frame-energy-based VAD mask over samples.
+    audio_matrix, sr = librosa.load(wav_path, sr=16000)
+    # print(sr)
+    isolated_word_audio = audio_matrix[best_start:best_end]
+    duration_sec = max_duration_samples/sr
 
-    Returns a boolean mask per-sample indicating voiced regions.
-    """
-    if y.ndim > 1:
-        y = np.mean(y, axis=1)
-    y = np.asarray(y, dtype=np.float32)
-    n_frames = max(1, 1 + (len(y) - frame_length) // hop_length)
-    energies = np.empty(n_frames, dtype=np.float32)
-    for i in range(n_frames):
-        s = i * hop_length
-        e = s + frame_length
-        frame = y[s:e] if e <= len(y) else y[s:]
-        energies[i] = np.mean(frame * frame) if len(frame) else 0.0
-    m = energies > (thresh * np.max(energies) if energies.size else 0.0)
-    # Expand to sample-level mask
-    mask = np.zeros_like(y, dtype=bool)
-    for i, keep in enumerate(m):
-        s = i * hop_length
-        e = min(s + frame_length, len(y))
-        if keep:
-            mask[s:e] = True
-    return mask
+    return isolated_word_audio, sr, wake_word, duration_sec
 
 
-def truncate_audio(y: np.ndarray, sr: int, max_duration_s: float) -> np.ndarray:
-    """Truncate to max duration (seconds)."""
-    max_samples = int(round(max_duration_s * sr))
-    return y[:max_samples]
+def get_wrd_from_wav(wav_path: str):
+    return wav_path.replace(".WAV.wav", ".WRD")
