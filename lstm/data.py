@@ -58,18 +58,19 @@ class ShortUtteranceDataset(Dataset):
     def load_chunk(self, wav_path):
         y, sr = librosa.load(str(wav_path), sr=self.sr)
         
-        # If audio is shorter than expected, pad it
-        if len(y) < self.chunk_samples:
-            pad_len = self.chunk_samples - len(y)
-            y = np.pad(y, (0, pad_len), mode='constant')
-            
-        # If training, take a random chunk
-        if self.is_train and len(y) > self.chunk_samples:
-            start = np.random.randint(0, len(y) - self.chunk_samples)
-            y = y[start:start + self.chunk_samples]
-        elif not self.is_train and len(y) > self.chunk_samples:
-            start = (len(y) - self.chunk_samples) // 2
-            y = y[start:start + self.chunk_samples]
+        if self.is_train:
+            # If audio is shorter than expected, pad it
+            if len(y) < self.chunk_samples:
+                pad_len = self.chunk_samples - len(y)
+                y = np.pad(y, (0, pad_len), mode='constant')
+                
+            # Take a random chunk limit for short-duration training
+            if len(y) > self.chunk_samples:
+                start = np.random.randint(0, len(y) - self.chunk_samples)
+                y = y[start:start + self.chunk_samples]
+        else:
+            # For evaluation, use the full utterance. (No padding, no cropping needed)
+            pass
             
         return self.extract_features(y)
 

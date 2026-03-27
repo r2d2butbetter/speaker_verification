@@ -23,6 +23,13 @@ class SpeakerLSTM(nn.Module):
             bidirectional=True
         )
         
+        # Self-Attention layer to dynamically focus on informative frames
+        self.attention = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.Tanh(),
+            nn.Linear(hidden_dim, 1, bias=False)
+        )
+        
         # We use bidirectional LSTM, so hidden size is doubled
         self.linear = nn.Linear(hidden_dim * 2, embedding_dim)
         
@@ -44,16 +51,12 @@ class SpeakerLSTM(nn.Module):
         lstm_out, (hn, cn) = self.lstm(x)
         
         # lstm_out is (batch, time, hidden_dim * 2)
-        # We can take the mean over the time dimension (mean pooling)
-        # or just take the last hidden state. Let's use mean pooling.
-        pooled = torch.mean(lstm_out, dim=1)
+        # Use attention to compute a weighted sum over the time dimension
+        attn_weights = F.softmax(self.attention(lstm_out), dim=1) # (batch, time, 1)
+        pooled = torch.sum(lstm_out * attn_weights, dim=1) # (batch, hidden_dim * 2)
         
         # Project to embedding space with an MLP head for better metric learning
         x_proj = F.relu(self.linear(pooled))
-        
-        # We can add another linear layer if desired, or just use the one
-        # Here we'll just use self.linear as the first part of the MLP if we had two,
-        # but let's just make sure the final embedding is L2 normalized.
         
         # L2 Normalize the embedding (crucial for cosine similarity and triplet margin)
         embedding = F.normalize(x_proj, p=2, dim=1)

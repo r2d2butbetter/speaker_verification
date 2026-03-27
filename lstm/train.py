@@ -64,7 +64,7 @@ def train_lstm():
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.5)
 
     # 5. Training Loop
-    num_epochs = 15
+    num_epochs = 25
     
     # Create results directory
     models_dir = Path("results/models/lstm")

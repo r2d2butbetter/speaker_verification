@@ -85,7 +85,8 @@ def run_evaluation():
     print(f"Using device: {device}")
     
     # 1. Load Model
-    model_path = Path("results/models/lstm/lstm_final.pt")
+    model_name = "lstm_final.pt" if len(sys.argv) == 1 else sys.argv[1]
+    model_path = Path(f"results/models/lstm/{model_name}")
     if not model_path.exists():
         print(f"Model not found at {model_path}. Please train first.")
         return
