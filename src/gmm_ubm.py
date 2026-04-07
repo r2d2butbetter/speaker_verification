@@ -44,19 +44,51 @@ class TargetModel:
 
 
 def map_adapt(ubm: UBMModel, X: np.ndarray, relevance_factor: float = 16.0) -> TargetModel:
-    """Placeholder for MAP adaptation from UBM to target model.
+    """MAP adaptation of UBM means toward target speaker data.
 
-    For scaffolding, we clone the UBM and refit on X to approximate adaptation.
-    Replace with proper MAP implementation later.
+    Implements Reynolds et al. (2000) mean-only MAP adaptation:
+      1. Compute posterior responsibilities of each UBM component for every frame.
+      2. Compute sufficient statistics (zeroth- and first-order).
+      3. Blend UBM means with speaker-specific means using the relevance factor.
+
+    Parameters
+    ----------
+    ubm : UBMModel
+        Trained Universal Background Model.
+    X : np.ndarray, shape (N, D)
+        Feature frames from the target speaker's enrollment utterances.
+    relevance_factor : float
+        Controls how much weight is given to the UBM prior vs. speaker data.
+        Higher = more UBM influence (safer with very little data).
     """
-    base = GaussianMixture(
-        n_components=ubm.gmm.n_components,
-        covariance_type=ubm.gmm.covariance_type,
-        max_iter=ubm.gmm.max_iter,
-        random_state=ubm.gmm.random_state,
-    )
-    base.means_init = ubm.gmm.means_
-    base.precisions_init = ubm.gmm.precisions_
-    base.weights_init = ubm.gmm.weights_
-    base.fit(X)
-    return TargetModel(gmm=base)
+    import copy
+
+    # 1. Compute posterior responsibilities: P(component k | frame x_t)
+    posteriors = ubm.gmm.predict_proba(X)          # (N, K)
+    # Numerical stability: clip tiny/NaN posteriors
+    posteriors = np.nan_to_num(posteriors, nan=0.0, posinf=1.0, neginf=0.0)
+    posteriors = np.clip(posteriors, 1e-300, None)
+
+    # 2. Sufficient statistics per component
+    n_k = posteriors.sum(axis=0)                    # (K,)  zeroth-order
+    F_k = posteriors.T @ X                          # (K, D) first-order
+    F_k = np.nan_to_num(F_k, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # 3. MAP-adapted means
+    adapted_means = np.copy(ubm.gmm.means_)
+    for k in range(ubm.gmm.n_components):
+        alpha_k = n_k[k] / (n_k[k] + relevance_factor)
+        if n_k[k] > 1e-10:
+            speaker_mean_k = F_k[k] / n_k[k]
+        else:
+            speaker_mean_k = ubm.gmm.means_[k]
+        adapted_means[k] = alpha_k * speaker_mean_k + (1 - alpha_k) * ubm.gmm.means_[k]
+
+    # Replace any remaining NaN with UBM means
+    nan_mask = ~np.isfinite(adapted_means)
+    adapted_means[nan_mask] = ubm.gmm.means_[nan_mask]
+
+    # 4. Build adapted GMM (keep UBM weights and covariances, only change means)
+    adapted_gmm = copy.deepcopy(ubm.gmm)
+    adapted_gmm.means_ = adapted_means
+    return TargetModel(gmm=adapted_gmm)
