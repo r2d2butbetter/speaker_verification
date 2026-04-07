@@ -1,162 +1,145 @@
-"""GMM-UBM short-duration evaluation: scoring, EER, and plots."""
-
-import sys
-from pathlib import Path
-import argparse
+import pickle
 import numpy as np
-import joblib
-import matplotlib
-matplotlib.use("Agg")
+import random
 import matplotlib.pyplot as plt
+from pathlib import Path
+import sys
 from sklearn.metrics import roc_curve
 
+# Point Python to your src/ directory
 sys.path.append(str(Path(__file__).parent.parent))
+from src.features import extract_mfcc_features
+from src.dsp_utils import extract_longest_word
 
-from src.data_io import load_wav
-from src.features import mfcc_with_deltas
-from src.gmm_ubm import UBMModel, TargetModel
+TIMIT_ROOT = Path("data") / "raw_timit" / "data"
+LISTS_DIR = Path("data") / "lists"
+OUT_DIR = Path("results")
 
+def evaluate_short_duration_sv():
+    list_path = LISTS_DIR / "test_enrollment_list.txt"
+    model_dir = OUT_DIR
+    
+    # 1. Load the Universal Background Model
+    with open(model_dir / "models" / "ubm_model.pkl", 'rb') as f:
+        ubm = pickle.load(f)
+        
+    # 2. Parse the test list and load all Target GMMs into RAM
+    with open(list_path, 'r') as f:
+        lines = f.read().splitlines()
 
-def extract_feats(wav_path: str) -> np.ndarray:
-    """Load wav and return feature matrix (T, 39)."""
-    audio, sr = load_wav(wav_path)
-    feats = mfcc_with_deltas(np.array(audio), sr)
-    return feats.T.astype(np.float64)
-
-
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ubm", type=Path, default=Path("results/models/ubm_model.pkl"))
-    ap.add_argument("--enrolled", type=Path, default=Path("results/enrolled_models"))
-    ap.add_argument("--lists", type=Path, default=Path("data/lists"))
-    ap.add_argument("--scores-dir", type=Path, default=Path("results/scores"))
-    ap.add_argument("--plots-dir", type=Path, default=Path("results/plots"))
-    ap.add_argument("--n-enroll", type=int, default=3,
-                    help="Must match enrollment split used in 03_enroll_targets.py")
-    args = ap.parse_args()
-
-    for p in [args.scores_dir, args.plots_dir]:
-        p.mkdir(parents=True, exist_ok=True)
-
-    # ---- Load UBM ----
-    if not args.ubm.exists():
-        print(f"UBM not found at {args.ubm}. Train it first.")
-        return
-    ubm = UBMModel.load(args.ubm)
-    print(f"Loaded UBM ({ubm.gmm.n_components} components).")
-
-    # ---- Load enrolled target models ----
+    test_data = {}
     target_models = {}
-    for pkl in sorted(args.enrolled.glob("speaker_*.pkl")):
-        spk_id = pkl.stem.replace("speaker_", "")
-        target_models[spk_id] = joblib.load(pkl)
-    if not target_models:
-        print("No enrolled models found. Run scripts/03_enroll_targets.py first.")
-        return
-    print(f"Loaded {len(target_models)} enrolled speaker models.")
+    
+    print("Loading Speaker Models into memory...")
+    for line in lines:
+        speaker_id, paths_str = line.split('|')
+        clean_id = speaker_id.split('\\')[-1] if '\\' in speaker_id else speaker_id
+        
+        # Isolate the unseen 'SI' files for testing
+        test_paths = [p for p in paths_str.split(',') if "SI" in Path(p).name]
+        test_data[clean_id] = test_paths
+        
+        # Load this speaker's custom model
+        model_path = model_dir / "enrolled_models" / f"speaker_{clean_id}.pkl"
+        if model_path.exists():
+            with open(model_path, 'rb') as f:
+                target_models[clean_id] = pickle.load(f)
 
-    # ---- Build test trials from enrollment list ----
-    enroll_list = args.lists / "test_enrollment_list.txt"
-    if not enroll_list.exists():
-        print("Missing test_enrollment_list.txt.")
-        return
+    speaker_ids = list(target_models.keys())
+    
+    true_scores = []
+    impostor_scores = []
 
-    test_trials = []  # (speaker_id, wav_path)
-    with open(enroll_list) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split("|")
-            if len(parts) != 2:
-                continue
-            speaker_id = Path(parts[0]).name
-            wav_paths = parts[1].split(",")
-            # Test utterances = everything after the enrollment set
-            for wp in wav_paths[args.n_enroll:]:
-                test_trials.append((speaker_id, wp))
+    print(f"\nRunning Wake-Word Evaluation for {len(speaker_ids)} enrolled speakers...")
+    
+    # 3. The Evaluation Loop
+    for target_id in speaker_ids:
+        target_gmm = target_models[target_id]
+        test_files = test_data.get(target_id, [])
+        
+        for wav_path_str in test_files:
+            wav_path = Path(wav_path_str)
+            wrd_path = wav_path.with_suffix('').with_suffix('.WRD')
+            
+            try:
+                # A. Extract the < 1.0s wake word
+                audio, sr, word, duration = extract_longest_word(wav_path, wrd_path)
+                
+                # B. Convert to 60-D features
+                # librosa deltas need at least 9 frames (~0.1s). If a word is too short, we skip.
+                if len(audio) < int(sr * 0.1):
+                    continue
+                    
+                features = extract_mfcc_features(audio, sr)
+                
+                # C. Calculate generic Background Score (Average log-likelihood per frame)
+                score_ubm = ubm.score(features)
+                
+                # D. True Trial: Score against their OWN model
+                score_true = target_gmm.score(features)
+                llr_true = score_true - score_ubm
+                true_scores.append(llr_true)
+                
+                # E. Impostor Trials: Score against 3 RANDOM OTHER models
+                impostors = random.sample([s for s in speaker_ids if s != target_id], 3)
+                for imp_id in impostors:
+                    imp_gmm = target_models[imp_id]
+                    score_imp = imp_gmm.score(features)
+                    llr_imp = score_imp - score_ubm
+                    impostor_scores.append(llr_imp)
+                    
+            except Exception as e:
+                print(f"Skipping {wav_path.name} due to feature extraction error: {e}")
 
-    if not test_trials:
-        print("No test trials. Check enrollment list and --n-enroll.")
-        return
-    print(f"Scoring {len(test_trials)} test utterances against {len(target_models)} speakers...")
+    print(f"\nEvaluation Complete!")
+    print(f"Total True Trials computed:     {len(true_scores)}")
+    print(f"Total Impostor Trials computed: {len(impostor_scores)}")
+    
+    eer, eer_threshold = calculate_eer(true_scores, impostor_scores)
+    if eer is not None:
+        print(f"Equal Error Rate (EER):         {eer * 100:.2f}%")
+        print(f"EER Threshold (LLR):            {eer_threshold:.4f}")
+    else:
+        print("Equal Error Rate (EER):         unavailable (need both genuine and impostor scores)")
 
-    # ---- Score ----
-    y_true = []
-    y_scores = []
-    scored = 0
+    plot_score_distributions(true_scores, impostor_scores, eer, eer_threshold)
 
-    for test_spk, wav_path in test_trials:
-        try:
-            X = extract_feats(wav_path)
-        except Exception as e:
-            print(f"  Skipping {wav_path}: {e}")
-            continue
 
-        ubm_score = ubm.gmm.score(X)
+def calculate_eer(true_scores, impostor_scores):
+    if not true_scores or not impostor_scores:
+        return None, None
 
-        for enr_spk, tgt_model in target_models.items():
-            # Log-likelihood ratio
-            tgt_score = tgt_model.gmm.score(X)
-            llr = tgt_score - ubm_score
-            y_scores.append(llr)
-            y_true.append(1 if test_spk == enr_spk else 0)
+    y_true = np.array([1] * len(true_scores) + [0] * len(impostor_scores))
+    y_scores = np.array(true_scores + impostor_scores)
 
-        scored += 1
-        if scored % 50 == 0:
-            print(f"  Scored {scored}/{len(test_trials)} utterances")
-
-    y_true = np.array(y_true)
-    y_scores = np.array(y_scores)
-
-    # ---- Save raw scores ----
-    np.savez(args.scores_dir / "gmm_ubm_scores.npz", y_true=y_true, y_scores=y_scores)
-
-    # ---- Compute EER ----
     fpr, tpr, thresholds = roc_curve(y_true, y_scores)
     fnr = 1 - tpr
     eer_idx = np.nanargmin(np.abs(fnr - fpr))
-    eer = fpr[eer_idx]
+    return float(fpr[eer_idx]), float(thresholds[eer_idx])
 
-    print(f"\n======================================")
-    print(f"GMM-UBM Evaluation")
-    print(f"Trials:              {len(y_scores)}")
-    print(f"Equal Error Rate:    {eer * 100:.2f}%")
-    print(f"======================================")
 
-    # ---- Plot 1: Score distributions ----
-    genuine = y_scores[y_true == 1]
-    impostor = y_scores[y_true == 0]
+def plot_score_distributions(true_scores, impostor_scores, eer=None, eer_threshold=None):
+    plt.figure(figsize=(10, 6))
+    
+    plt.hist(impostor_scores, bins=40, density=True, alpha=0.6, color='red', label='Impostors (Spoofs)')
+    plt.hist(true_scores, bins=40, density=True, alpha=0.6, color='green', label='True Speakers (Targets)')
+    
+    plt.title("Wake-Word Speaker Verification (< 0.8s Duration)\nLog-Likelihood Ratio Distributions")
+    plt.xlabel("Log-Likelihood Ratio Score (LLR)")
+    plt.ylabel("Probability Density")
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=1, label='Zero Threshold')
+    if eer_threshold is not None:
+        plt.axvline(x=eer_threshold, color='blue', linestyle=':', linewidth=1.5, label=f'EER Threshold ({eer_threshold:.3f})')
+    if eer is not None:
+        plt.text(0.02, 0.98, f"EER: {eer * 100:.2f}%", transform=plt.gca().transAxes, va='top')
+    
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.hist(impostor, bins=80, alpha=0.6, color="red", label="Impostor", density=True)
-    ax.hist(genuine, bins=80, alpha=0.6, color="green", label="Genuine", density=True)
-    ax.set_xlabel("Log-Likelihood Ratio")
-    ax.set_ylabel("Density")
-    ax.set_title(f"GMM-UBM Score Distribution  (EER = {eer * 100:.2f}%)")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(args.plots_dir / "gmm_ubm_score_dist.png", dpi=150)
-    plt.close(fig)
-
-    # ---- Plot 2: DET curve ----
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(fpr * 100, fnr * 100, linewidth=2, color="blue")
-    ax.plot([0, 100], [0, 100], "k--", alpha=0.3)
-    ax.scatter([eer * 100], [eer * 100], c="red", zorder=5, s=80, label=f"EER = {eer * 100:.2f}%")
-    ax.set_xlabel("False Acceptance Rate (%)")
-    ax.set_ylabel("False Rejection Rate (%)")
-    ax.set_title("GMM-UBM DET Curve")
-    ax.set_xlim(0, 50)
-    ax.set_ylim(0, 50)
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(args.plots_dir / "gmm_ubm_det.png", dpi=150)
-    plt.close(fig)
-
-    print(f"Plots saved to {args.plots_dir}")
-
+def main() -> None:
+    evaluate_short_duration_sv()
 
 if __name__ == "__main__":
     main()

@@ -1,77 +1,74 @@
-"""MAP-adapt the UBM for each test speaker using their enrollment utterances."""
-
-import sys
+import copy
 from pathlib import Path
 import argparse
+import pickle as pkl
+
+import librosa
 import numpy as np
-import joblib
+import sys
 
-sys.path.append(str(Path(__file__).parent.parent))
+path_to_src = Path(__file__).parent.parent
+path_to_src = str(path_to_src)
+sys.path.append(path_to_src)
 
-from src.data_io import load_wav
-from src.features import mfcc_with_deltas
-from src.gmm_ubm import UBMModel, map_adapt
+from src.features import extract_mfcc_features
+
+TIMIT_ROOT = Path("data") / "raw_timit" / "data"
+LISTS_DIR = Path("data") / "lists"
+OUT_DIR = Path("results")
+
+def enroll_speakers():
+    model_path = OUT_DIR / "models" / "ubm_model.pkl"
+
+
+    with open(model_path, 'rb') as f:
+        ubm = pkl.load(f)
+    print(f"Loaded ubm with {ubm.n_components} components")
+
+    list_path = LISTS_DIR / "test_enrollment_list.txt"
+    with open(list_path, 'r')as f:  
+        lines = f.read().splitlines()
+    
+    print(f"enrolling {len(lines)} speakers")
+    for line in lines:
+        speaker_id, paths_str = line.split('|')
+        all_paths = paths_str.split(',')
+
+        enroll_paths = [p for p in all_paths if "SX" in Path(p).name]
+
+        speaker_features = []
+        for wav_path in enroll_paths:
+            audio, sr = librosa.load(wav_path, sr=16000)
+            
+            clean_audio, _ = librosa.effects.trim(audio, top_db=25)
+            features = extract_mfcc_features(clean_audio, sr)
+            speaker_features.append(features)
+    
+        x_enroll = np.vstack(speaker_features)
+
+        target_gmm = copy.deepcopy(ubm)
+        target_gmm.warm_start = True
+        target_gmm.max_iter = 3
+
+        target_gmm.fit(x_enroll)
+
+        clean_id = speaker_id.split('\\')[-1] if '\\' in speaker_id else speaker_id
+        speaker_model_path = OUT_DIR / "enrolled_models"
+        model_file_path = speaker_model_path / f"speaker_{clean_id}.pkl"
+        speaker_model_path.mkdir(exist_ok=True, parents=True)
+
+        with open(model_file_path, 'wb') as f:
+            pkl.dump(target_gmm, f)
+
+        print(f"Enrolled Speaker: {clean_id} | Frames: {x_enroll.shape[0]}")
+
+    print("\nAll target speakers successfully enrolled and saved to disk!")
+
+
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ubm", type=Path, default=Path("results/models/ubm_model.pkl"))
-    ap.add_argument("--lists", type=Path, default=Path("data/lists"))
-    ap.add_argument("--out", type=Path, default=Path("results/enrolled_models"))
-    ap.add_argument("--n-enroll", type=int, default=3,
-                    help="Number of utterances per speaker used for enrollment")
-    args = ap.parse_args()
-
-    args.out.mkdir(parents=True, exist_ok=True)
-
-    if not args.ubm.exists():
-        print(f"UBM not found at {args.ubm}. Train it first (scripts/02_train_ubm.py).")
-        return
-
-    ubm = UBMModel.load(args.ubm)
-    print(f"Loaded UBM with {ubm.gmm.n_components} components.")
-
-    enroll_list = args.lists / "test_enrollment_list.txt"
-    if not enroll_list.exists():
-        print("Missing test_enrollment_list.txt. Run scripts/01_prep_timit.py first.")
-        return
-
-    with open(enroll_list) as f:
-        lines = [l.strip() for l in f if l.strip()]
-
-    enrolled = 0
-    for line in lines:
-        parts = line.split("|")
-        if len(parts) != 2:
-            continue
-        speaker_dir = parts[0]
-        speaker_id = Path(speaker_dir).name
-        wav_paths = parts[1].split(",")
-
-        enroll_paths = wav_paths[:args.n_enroll]
-
-        # Extract features from enrollment utterances
-        frames = []
-        for wp in enroll_paths:
-            try:
-                audio, sr = load_wav(wp)
-                feats = mfcc_with_deltas(np.array(audio), sr)
-                frames.append(feats.T)
-            except Exception as e:
-                print(f"  Skipping {wp}: {e}")
-
-        if not frames:
-            print(f"  No usable enrollment data for {speaker_id}, skipping.")
-            continue
-
-        X = np.vstack(frames).astype(np.float64)
-        target = map_adapt(ubm, X)
-
-        out_path = args.out / f"speaker_{speaker_id}.pkl"
-        joblib.dump(target, out_path)
-        enrolled += 1
-
-    print(f"Enrolled {enrolled} target speakers in {args.out}")
+    enroll_speakers()
 
 
 if __name__ == "__main__":
