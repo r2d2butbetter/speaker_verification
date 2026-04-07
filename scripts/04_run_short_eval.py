@@ -4,6 +4,7 @@ import random
 import matplotlib.pyplot as plt
 from pathlib import Path
 import sys
+from sklearn.metrics import roc_curve
 
 # Point Python to your src/ directory
 sys.path.append(str(Path(__file__).parent.parent))
@@ -94,10 +95,30 @@ def evaluate_short_duration_sv():
     print(f"Total True Trials computed:     {len(true_scores)}")
     print(f"Total Impostor Trials computed: {len(impostor_scores)}")
     
-    plot_score_distributions(true_scores, impostor_scores)
+    eer, eer_threshold = calculate_eer(true_scores, impostor_scores)
+    if eer is not None:
+        print(f"Equal Error Rate (EER):         {eer * 100:.2f}%")
+        print(f"EER Threshold (LLR):            {eer_threshold:.4f}")
+    else:
+        print("Equal Error Rate (EER):         unavailable (need both genuine and impostor scores)")
+
+    plot_score_distributions(true_scores, impostor_scores, eer, eer_threshold)
 
 
-def plot_score_distributions(true_scores, impostor_scores):
+def calculate_eer(true_scores, impostor_scores):
+    if not true_scores or not impostor_scores:
+        return None, None
+
+    y_true = np.array([1] * len(true_scores) + [0] * len(impostor_scores))
+    y_scores = np.array(true_scores + impostor_scores)
+
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
+    fnr = 1 - tpr
+    eer_idx = np.nanargmin(np.abs(fnr - fpr))
+    return float(fpr[eer_idx]), float(thresholds[eer_idx])
+
+
+def plot_score_distributions(true_scores, impostor_scores, eer=None, eer_threshold=None):
     plt.figure(figsize=(10, 6))
     
     plt.hist(impostor_scores, bins=40, density=True, alpha=0.6, color='red', label='Impostors (Spoofs)')
@@ -107,6 +128,10 @@ def plot_score_distributions(true_scores, impostor_scores):
     plt.xlabel("Log-Likelihood Ratio Score (LLR)")
     plt.ylabel("Probability Density")
     plt.axvline(x=0, color='black', linestyle='--', linewidth=1, label='Zero Threshold')
+    if eer_threshold is not None:
+        plt.axvline(x=eer_threshold, color='blue', linestyle=':', linewidth=1.5, label=f'EER Threshold ({eer_threshold:.3f})')
+    if eer is not None:
+        plt.text(0.02, 0.98, f"EER: {eer * 100:.2f}%", transform=plt.gca().transAxes, va='top')
     
     plt.legend()
     plt.grid(True, alpha=0.3)
