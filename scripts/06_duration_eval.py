@@ -22,16 +22,15 @@ from collections import defaultdict
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.data_io import load_wav
-from src.features import mfcc_with_deltas
+from src.features import extract_mfcc_features, mfcc_with_deltas
 from src.gmm_ubm import UBMModel
 
 
 # ---- Helpers ----
 
-def extract_feats_from_audio(audio, sr):
-    """MFCC+delta+delta-delta, returns (T, 39)."""
-    feats = mfcc_with_deltas(np.asarray(audio, dtype=np.float32), sr)
-    return feats.T.astype(np.float64)
+def extract_feats_gmm(audio, sr):
+    """60-dim features (20 MFCCs + deltas) for the GMM-UBM, returns (T, 60)."""
+    return extract_mfcc_features(np.asarray(audio, dtype=np.float32), sr)
 
 
 def truncate_audio(audio, sr, duration_sec):
@@ -72,7 +71,7 @@ def eval_gmm_ubm_at_duration(ubm, target_models, test_trials, duration_sec, sr=1
                 continue
 
         try:
-            X = extract_feats_from_audio(audio, file_sr)
+            X = extract_feats_gmm(audio, file_sr)
         except Exception:
             continue
 
@@ -82,7 +81,7 @@ def eval_gmm_ubm_at_duration(ubm, target_models, test_trials, duration_sec, sr=1
         ubm_score = ubm.gmm.score(X)
 
         for enr_spk, tgt_model in target_models.items():
-            tgt_score = tgt_model.gmm.score(X)
+            tgt_score = tgt_model.score(X)
             llr = tgt_score - ubm_score
             y_scores.append(llr)
             y_true.append(1 if test_spk == enr_spk else 0)
@@ -142,7 +141,6 @@ def eval_lstm_at_duration(model, device, target_embs, test_trials, duration_sec,
 def main():
     import torch
     from lstm.model import SpeakerLSTM
-    from lstm.data import ShortUtteranceDataset
 
     plots_dir = Path("results/plots")
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -184,7 +182,9 @@ def main():
         target_models = {}
         for pkl in sorted(enrolled_dir.glob("speaker_*.pkl")):
             spk_id = pkl.stem.replace("speaker_", "")
-            target_models[spk_id] = joblib.load(pkl)
+            import pickle
+            with open(pkl, 'rb') as pf:
+                target_models[spk_id] = pickle.load(pf)
         print(f"GMM-UBM: {ubm.gmm.n_components} components, {len(target_models)} enrolled speakers")
 
         for dur, label in zip(durations, duration_labels):
@@ -249,63 +249,15 @@ def main():
         lstm_eers = [None] * len(durations)
 
     # ============================================================
-    # LSTM v2 (improved) setup
-    # ============================================================
-    lstm_v2_path = Path("results/models/lstm_v3/lstm_v3_best.pt")
-    lstm_v2_eers = []
-
-    if lstm_v2_path.exists():
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        state_dict = torch.load(lstm_v2_path, map_location=device)
-
-        model_v2 = SpeakerLSTM(input_dim=39, hidden_dim=256, num_layers=2,
-                               embedding_dim=128, num_classes=None)
-        model_v2.load_state_dict(state_dict, strict=False)
-        model_v2.to(device)
-        model_v2.eval()
-
-        # Compute enrollment d-vectors for v2
-        target_embs_v2 = {}
-        for spk_id, e_wavs in enroll_wavs_by_spk.items():
-            embs = []
-            for wp in e_wavs:
-                try:
-                    audio, sr = load_wav(wp)
-                    feats = mfcc_with_deltas(np.array(audio, dtype=np.float32), sr)
-                    feats_t = torch.tensor(feats.T, dtype=torch.float32).unsqueeze(0).to(device)
-                    mean = feats_t.mean(dim=1, keepdim=True)
-                    std = feats_t.std(dim=1, keepdim=True) + 1e-6
-                    feats_t = (feats_t - mean) / std
-                    with torch.no_grad():
-                        emb = model_v2(feats_t).cpu().numpy().flatten()
-                    embs.append(emb)
-                except Exception:
-                    pass
-            if embs:
-                m = np.mean(embs, axis=0)
-                target_embs_v2[spk_id] = m / np.linalg.norm(m)
-
-        print(f"LSTM v2: {len(target_embs_v2)} enrolled speakers")
-
-        for dur, label in zip(durations, duration_labels):
-            eer, n_trials = eval_lstm_at_duration(model_v2, device, target_embs_v2, test_trials, dur)
-            lstm_v2_eers.append(eer * 100)
-            print(f"  LSTM v2 @ {label:>5s}: EER = {eer*100:6.2f}%  ({n_trials} trials)")
-    else:
-        print("LSTM v2 model not found, skipping.")
-        lstm_v2_eers = [None] * len(durations)
-
-    # ============================================================
-    # Plot: EER vs Duration
+    # Plot: EER vs Duration — GMM-UBM vs Bi-LSTM
     # ============================================================
     print("\n--- Summary ---")
-    print(f"{'Duration':<10} {'GMM-UBM':>10} {'LSTM':>10} {'LSTM v2':>10}")
-    print("-" * 42)
-    for label, g, l, l2 in zip(duration_labels, gmm_eers, lstm_eers, lstm_v2_eers):
+    print(f"{'Duration':<10} {'GMM-UBM':>10} {'Bi-LSTM':>10}")
+    print("-" * 32)
+    for label, g, l in zip(duration_labels, gmm_eers, lstm_eers):
         gs = f"{g:.2f}%" if g is not None else "N/A"
         ls = f"{l:.2f}%" if l is not None else "N/A"
-        l2s = f"{l2:.2f}%" if l2 is not None else "N/A"
-        print(f"{label:<10} {gs:>10} {ls:>10} {l2s:>10}")
+        print(f"{label:<10} {gs:>10} {ls:>10}")
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     x_pos = np.arange(len(duration_labels))
@@ -318,19 +270,14 @@ def main():
     if any(l is not None for l in lstm_eers):
         valid_l = [(i, v) for i, v in enumerate(lstm_eers) if v is not None]
         ax.plot([x_pos[i] for i, _ in valid_l], [v for _, v in valid_l],
-                "s--", color="#228833", linewidth=2, markersize=7, alpha=0.6, label="Bi-LSTM (baseline)")
-
-    if any(l is not None for l in lstm_v2_eers):
-        valid_l2 = [(i, v) for i, v in enumerate(lstm_v2_eers) if v is not None]
-        ax.plot([x_pos[i] for i, _ in valid_l2], [v for _, v in valid_l2],
-                "D-", color="#EE6677", linewidth=2.5, markersize=8, label="Bi-LSTM (improved)")
+                "s-", color="#EE6677", linewidth=2.5, markersize=8, label="Bi-LSTM")
 
     ax.set_xticks(x_pos)
     ax.set_xticklabels(duration_labels, fontsize=12)
     ax.set_xlabel("Test Utterance Duration", fontsize=13)
     ax.set_ylabel("Equal Error Rate (%)", fontsize=13)
     ax.set_title("Short-Duration Speaker Verification:\nEER Degradation vs. Utterance Length", fontsize=14)
-    ax.legend(fontsize=11)
+    ax.legend(fontsize=12)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(plots_dir / "eer_vs_duration.png", dpi=150)

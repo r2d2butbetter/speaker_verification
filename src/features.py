@@ -14,6 +14,19 @@ def extract_mfcc_features(audio, sr=16000, n_mfcc=20):
     return feats
 
 
+def mfcc_with_deltas(audio, sr=16000, n_mfcc=13, n_fft=400, hop_length=160):
+    """Extract 13 MFCCs + delta + delta-delta → (39, T) matrix.
+
+    This is the 39-dim feature set used by the LSTM speaker verification
+    pipeline (as opposed to the 60-dim set from extract_mfcc_features).
+    """
+    mfcc = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=n_mfcc,
+                                 n_fft=n_fft, hop_length=hop_length)
+    d1 = librosa.feature.delta(mfcc)
+    d2 = librosa.feature.delta(mfcc, order=2)
+    return np.vstack([mfcc, d1, d2])   # (39, T)
+
+
 if __name__== "__main__":
     sr = 16000
     n_mfcc = 20

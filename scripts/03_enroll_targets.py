@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 import argparse
 import pickle as pkl
+import joblib
 
 import librosa
 import numpy as np
@@ -21,8 +22,7 @@ def enroll_speakers():
     model_path = OUT_DIR / "models" / "ubm_model.pkl"
 
 
-    with open(model_path, 'rb') as f:
-        ubm = pkl.load(f)
+    ubm = joblib.load(model_path)
     print(f"Loaded ubm with {ubm.n_components} components")
 
     list_path = LISTS_DIR / "test_enrollment_list.txt"
@@ -52,7 +52,7 @@ def enroll_speakers():
 
         target_gmm.fit(x_enroll)
 
-        clean_id = speaker_id.split('\\')[-1] if '\\' in speaker_id else speaker_id
+        clean_id = Path(speaker_id).name
         speaker_model_path = OUT_DIR / "enrolled_models"
         model_file_path = speaker_model_path / f"speaker_{clean_id}.pkl"
         speaker_model_path.mkdir(exist_ok=True, parents=True)

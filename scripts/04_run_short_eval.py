@@ -1,4 +1,5 @@
 import pickle
+import joblib
 import numpy as np
 import random
 import matplotlib.pyplot as plt
@@ -20,8 +21,7 @@ def evaluate_short_duration_sv():
     model_dir = OUT_DIR
     
     # 1. Load the Universal Background Model
-    with open(model_dir / "models" / "ubm_model.pkl", 'rb') as f:
-        ubm = pickle.load(f)
+    ubm = joblib.load(model_dir / "models" / "ubm_model.pkl")
         
     # 2. Parse the test list and load all Target GMMs into RAM
     with open(list_path, 'r') as f:
@@ -33,7 +33,7 @@ def evaluate_short_duration_sv():
     print("Loading Speaker Models into memory...")
     for line in lines:
         speaker_id, paths_str = line.split('|')
-        clean_id = speaker_id.split('\\')[-1] if '\\' in speaker_id else speaker_id
+        clean_id = Path(speaker_id).name
         
         # Isolate the unseen 'SI' files for testing
         test_paths = [p for p in paths_str.split(',') if "SI" in Path(p).name]

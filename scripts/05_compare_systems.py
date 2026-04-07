@@ -1,8 +1,11 @@
 """Compare GMM-UBM vs LSTM speaker verification results side-by-side.
 
 Run AFTER:
-  - scripts/04_run_short_eval.py  (produces results/scores/gmm_ubm_scores.npz)
-  - lstm/enroll_and_eval.py        (produces LSTM scores on the fly)
+  - scripts/03_enroll_targets.py   (enrolls GMM speaker models)
+  - lstm/train.py                  (trains the LSTM model)
+
+Both systems are evaluated on the same test enrollment list with the same
+trial protocol (enroll on first 3 utterances, test on the rest, all-vs-all).
 
 This script generates:
   1. Overlaid DET curves
@@ -11,8 +14,12 @@ This script generates:
 """
 
 import sys
+import pickle
+import random
 from pathlib import Path
 import numpy as np
+import librosa
+import joblib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -20,6 +27,10 @@ from sklearn.metrics import roc_curve
 from collections import defaultdict
 
 sys.path.append(str(Path(__file__).parent.parent))
+
+from src.data_io import load_wav
+from src.features import extract_mfcc_features, mfcc_with_deltas
+from src.dsp_utils import extract_longest_word
 
 
 def compute_eer(y_true, y_scores):
@@ -29,29 +40,90 @@ def compute_eer(y_true, y_scores):
     return fpr[idx], fpr, fnr
 
 
-def get_lstm_scores():
-    """Reproduce the LSTM scoring pipeline and return (y_true, y_scores)."""
-    import torch
-    from lstm.model import SpeakerLSTM
-    from lstm.data import ShortUtteranceDataset
-
-    lists_dir = Path("data/lists")
-    enroll_list_path = lists_dir / "test_enrollment_list.txt"
-
-    enroll_wavs, test_wavs = [], []
-    with open(enroll_list_path) as f:
+def parse_enrollment_list(list_path, n_enroll=3):
+    """Parse test_enrollment_list.txt → per-speaker enroll/test wavs."""
+    enroll_by_spk, test_trials = {}, []
+    with open(list_path) as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             parts = line.split("|")
-            if len(parts) == 2:
-                paths = parts[1].split(",")
-                if len(paths) >= 3:
-                    enroll_wavs.extend(paths[:3])
-                    test_wavs.extend(paths[3:])
-                else:
-                    enroll_wavs.extend(paths)
+            if len(parts) != 2:
+                continue
+            spk_id = Path(parts[0]).name
+            wavs = parts[1].split(",")
+            enroll_by_spk[spk_id] = wavs[:n_enroll]
+            for wp in wavs[n_enroll:]:
+                test_trials.append((spk_id, wp))
+    return enroll_by_spk, test_trials
+
+
+def get_gmm_scores():
+    """Score GMM-UBM on wake-word segments (<0.8s), matching 04_run_short_eval.
+
+    Uses SI test files, extracts the longest word from each via .WRD,
+    scores true trial + 3 random impostors per utterance.
+    Returns (y_true, y_scores).
+    """
+    ubm_path = Path("results/models/ubm_model.pkl")
+    enrolled_dir = Path("results/enrolled_models")
+    list_path = Path("data/lists/test_enrollment_list.txt")
+
+    ubm = joblib.load(ubm_path)
+
+    # Load enrolled speaker models and parse test list
+    with open(list_path) as f:
+        lines = f.read().splitlines()
+
+    test_data = {}
+    target_models = {}
+    for line in lines:
+        speaker_id, paths_str = line.split("|")
+        clean_id = Path(speaker_id).name
+        test_paths = [p for p in paths_str.split(",") if "SI" in Path(p).name]
+        test_data[clean_id] = test_paths
+        model_path = enrolled_dir / f"speaker_{clean_id}.pkl"
+        if model_path.exists():
+            with open(model_path, "rb") as pf:
+                target_models[clean_id] = pickle.load(pf)
+
+    speaker_ids = list(target_models.keys())
+    true_scores, impostor_scores = [], []
+
+    for target_id in speaker_ids:
+        target_gmm = target_models[target_id]
+        for wav_path_str in test_data.get(target_id, []):
+            wav_path = Path(wav_path_str)
+            wrd_path = wav_path.with_suffix("").with_suffix(".WRD")
+            try:
+                audio, sr, word, duration = extract_longest_word(wav_path, wrd_path)
+                if len(audio) < int(sr * 0.1):
+                    continue
+                features = extract_mfcc_features(audio, sr)
+                score_ubm = ubm.score(features)
+
+                # True trial
+                llr_true = target_gmm.score(features) - score_ubm
+                true_scores.append(llr_true)
+
+                # 3 random impostor trials
+                impostors = random.sample([s for s in speaker_ids if s != target_id], 3)
+                for imp_id in impostors:
+                    llr_imp = target_models[imp_id].score(features) - score_ubm
+                    impostor_scores.append(llr_imp)
+            except Exception:
+                continue
+
+    y_true = np.array([1] * len(true_scores) + [0] * len(impostor_scores))
+    y_scores = np.array(true_scores + impostor_scores)
+    return y_true, y_scores
+
+
+def get_lstm_scores(enroll_by_spk, test_trials):
+    """Score all trials with Bi-LSTM (cosine sim). Returns (y_true, y_scores)."""
+    import torch
+    from lstm.model import SpeakerLSTM
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -68,38 +140,41 @@ def get_lstm_scores():
     model.to(device)
     model.eval()
 
-    dummy_dict = defaultdict(lambda: 0)
-
-    def extract_embs(wav_list):
-        ds = ShortUtteranceDataset(wav_list, dummy_dict, chunk_length_sec=1.5, is_train=False)
-        speaker_embs = defaultdict(list)
+    def wav_to_emb(wav_path):
+        audio, sr = load_wav(wav_path)
+        feats = mfcc_with_deltas(np.array(audio, dtype=np.float32), sr)
+        feats_t = torch.tensor(feats.T, dtype=torch.float32).unsqueeze(0).to(device)
+        mean = feats_t.mean(dim=1, keepdim=True)
+        std = feats_t.std(dim=1, keepdim=True) + 1e-6
+        feats_t = (feats_t - mean) / std
         with torch.no_grad():
-            for i in range(len(ds)):
-                feats, _ = ds[i]
-                feats = feats.unsqueeze(0).to(device)
-                mean = feats.mean(dim=1, keepdim=True)
-                std = feats.std(dim=1, keepdim=True) + 1e-6
-                feats = (feats - mean) / std
-                emb = model(feats)
-                spk = Path(ds.wavs[i]).parent.name
-                speaker_embs[spk].append(emb.cpu().numpy().flatten())
-        return speaker_embs
+            emb = model(feats_t).cpu().numpy().flatten()
+        return emb
 
-    enroll_embs = extract_embs(enroll_wavs)
-    target_models = {}
-    for spk, embs in enroll_embs.items():
-        m = np.mean(embs, axis=0)
-        target_models[spk] = m / np.linalg.norm(m)
+    # Enroll
+    target_embs = {}
+    for spk_id, e_wavs in enroll_by_spk.items():
+        embs = []
+        for wp in e_wavs:
+            try:
+                embs.append(wav_to_emb(wp))
+            except Exception:
+                pass
+        if embs:
+            m = np.mean(embs, axis=0)
+            target_embs[spk_id] = m / np.linalg.norm(m)
 
-    test_embs = extract_embs(test_wavs)
-
+    # Test
     y_true, y_scores = [], []
-    for test_spk, t_embs in test_embs.items():
-        for t_emb in t_embs:
-            t_norm = t_emb / np.linalg.norm(t_emb)
-            for enr_spk, enr_emb in target_models.items():
-                y_scores.append(float(np.dot(t_norm, enr_emb)))
-                y_true.append(1 if test_spk == enr_spk else 0)
+    for test_spk, wav_path in test_trials:
+        try:
+            emb = wav_to_emb(wav_path)
+        except Exception:
+            continue
+        emb = emb / np.linalg.norm(emb)
+        for enr_spk, enr_emb in target_embs.items():
+            y_scores.append(float(np.dot(emb, enr_emb)))
+            y_true.append(1 if test_spk == enr_spk else 0)
 
     return np.array(y_true), np.array(y_scores)
 
@@ -108,25 +183,21 @@ def main():
     plots_dir = Path("results/plots")
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Load GMM-UBM scores ----
-    gmm_scores_path = Path("results/scores/gmm_ubm_scores.npz")
-    if not gmm_scores_path.exists():
-        print("GMM-UBM scores not found. Run scripts/04_run_short_eval.py first.")
-        return
-    gmm_data = np.load(gmm_scores_path)
-    gmm_true, gmm_scores = gmm_data["y_true"], gmm_data["y_scores"]
+    enroll_list = Path("data/lists/test_enrollment_list.txt")
+    enroll_by_spk, test_trials = parse_enrollment_list(enroll_list)
+    print(f"Test trials: {len(test_trials)} utterances, {len(enroll_by_spk)} speakers\n")
+
+    # ---- GMM-UBM scores (wake-word <0.8s, matching 04_run_short_eval) ----
+    print("Computing GMM-UBM scores (wake-word segments)...")
+    gmm_true, gmm_scores = get_gmm_scores()
     gmm_eer, gmm_fpr, gmm_fnr = compute_eer(gmm_true, gmm_scores)
     print(f"GMM-UBM  EER: {gmm_eer * 100:.2f}%  ({len(gmm_scores)} trials)")
 
-    # ---- Compute LSTM scores ----
-    lstm_path = Path("results/models/lstm/lstm_final.pt")
-    if not lstm_path.exists():
-        print("LSTM model not found. Train it first.")
-        return
+    # ---- LSTM scores ----
     print("Computing LSTM scores...")
-    lstm_true, lstm_scores = get_lstm_scores()
+    lstm_true, lstm_scores = get_lstm_scores(enroll_by_spk, test_trials)
     lstm_eer, lstm_fpr, lstm_fnr = compute_eer(lstm_true, lstm_scores)
-    print(f"LSTM     EER: {lstm_eer * 100:.2f}%  ({len(lstm_scores)} trials)")
+    print(f"Bi-LSTM  EER: {lstm_eer * 100:.2f}%  ({len(lstm_scores)} trials)")
 
     # ===== PLOT 1: Overlaid DET curves =====
     fig, ax = plt.subplots(figsize=(7, 7))
