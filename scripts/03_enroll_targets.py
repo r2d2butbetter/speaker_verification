@@ -46,11 +46,11 @@ def enroll_speakers():
     
         x_enroll = np.vstack(speaker_features)
 
-        target_gmm = copy.deepcopy(ubm)
-        target_gmm.warm_start = True
-        target_gmm.max_iter = 3
-
-        target_gmm.fit(x_enroll)
+    # Use MAP adaptation instead of EM re-training
+        from src.gmm_ubm import UBMModel, map_adapt
+        ubm_model = UBMModel(gmm=ubm)
+        target_model = map_adapt(ubm_model, x_enroll, relevance_factor=16.0)
+        target_gmm = target_model.gmm
 
         clean_id = Path(speaker_id).name
         speaker_model_path = OUT_DIR / "enrolled_models"

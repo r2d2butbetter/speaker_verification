@@ -195,6 +195,8 @@ def main():
     # ---- GMM-UBM scores (wake-word <0.8s, matching 04_run_short_eval) ----
     print("Computing GMM-UBM scores (wake-word segments)...")
     gmm_true, gmm_scores = get_gmm_scores()
+    gmm_scores = gmm_scores - np.mean(gmm_scores)  # Center the GMM-UBM scores around 0
+
     gmm_eer, gmm_fpr, gmm_fnr, gmm_thr, gmm_eer_idx, gmm_tpr = compute_eer(gmm_true, gmm_scores)
     print(f"GMM-UBM  EER: {gmm_eer * 100:.2f}%  ({len(gmm_scores)} trials)")
 
@@ -264,6 +266,8 @@ def main():
     gmm_impostor = gmm_scores[gmm_true == 0]
     ax1.hist(gmm_impostor, bins=50, density=True, alpha=0.6, color="red", label="Impostor")
     ax1.hist(gmm_genuine, bins=50, density=True, alpha=0.6, color="#6688CC", label="Genuine")
+    gmm_max_score = max(abs(np.min(gmm_scores)), abs(np.max(gmm_scores)))
+    ax1.set_xlim(-gmm_max_score, gmm_max_score)
     ax1.set_xlabel("Score", fontsize=11)
     ax1.set_ylabel("Density", fontsize=11)
     ax1.set_title(f"GMM-UBM (LLR)  (EER={gmm_eer*100:.2f}%)", fontsize=12)

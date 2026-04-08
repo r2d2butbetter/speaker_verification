@@ -117,8 +117,14 @@ def calculate_eer(true_scores, impostor_scores):
     eer_idx = np.nanargmin(np.abs(fnr - fpr))
     return float(fpr[eer_idx]), float(thresholds[eer_idx])
 
-
 def plot_score_distributions(true_scores, impostor_scores, eer=None, eer_threshold=None):
+    all_scores = true_scores + impostor_scores
+    score_mean = np.mean(all_scores)
+    true_scores = [s - score_mean for s in true_scores]
+    impostor_scores = [s - score_mean for s in impostor_scores]
+    if eer_threshold is not None:
+        eer_threshold -= score_mean
+
     plt.figure(figsize=(10, 6))
     
     plt.hist(impostor_scores, bins=40, density=True, alpha=0.6, color='red', label='Impostors (Spoofs)')
@@ -133,6 +139,9 @@ def plot_score_distributions(true_scores, impostor_scores, eer=None, eer_thresho
     if eer is not None:
         plt.text(0.02, 0.98, f"EER: {eer * 100:.2f}%", transform=plt.gca().transAxes, va='top')
     
+    max_score = max(abs(np.min(all_scores - score_mean)), abs(np.max(all_scores - score_mean)))
+    plt.xlim(-max_score, max_score)
+
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
