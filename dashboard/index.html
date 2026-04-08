@@ -395,15 +395,14 @@
                 <div class="eyebrow">TIMIT speaker verification</div>
                 <h1>Playback a dataset utterance, then verify it against a speaker model.</h1>
                 <p class="subtitle">
-                    Select a target speaker model from the enrolled TIMIT speakers, pick a test recording from the
-                    dataset itself,
-                    and run a GMM-UBM verification decision without using any external audio.
+                    Select a model family, choose a target speaker from the enrolled TIMIT speakers, pick a test
+                    recording from the dataset itself, and run verification without using any external audio.
                 </p>
             </div>
 
             <div class="stats">
                 <div class="stat">
-                    <span>Available models</span>
+                    <span>Model families</span>
                     <strong id="modelCount">0</strong>
                 </div>
                 <div class="stat">
@@ -421,15 +420,15 @@
             <article class="panel">
                 <div class="panel-head">
                     <h2>Verification controls</h2>
-                    <p>Choose the enrolled speaker model and a TIMIT file from the dataset tree, then verify the
-                        selected utterance.</p>
+                    <p>Choose a model family, then pick the enrolled speaker and TIMIT file from the dataset tree.
+                        BiLSTM requires a valid PyTorch checkpoint.</p>
                 </div>
                 <div class="panel-body">
                     <div class="controls">
                         <div class="row">
                             <div class="field">
-                                <label for="targetSpeaker">Target speaker model</label>
-                                <select id="targetSpeaker"></select>
+                                <label for="modelType">Model family</label>
+                                <select id="modelType"></select>
                             </div>
                             <div class="field">
                                 <label for="threshold">Decision threshold</label>
@@ -439,13 +438,18 @@
 
                         <div class="row">
                             <div class="field">
+                                <label for="targetSpeaker">Target speaker model</label>
+                                <select id="targetSpeaker"></select>
+                            </div>
+                            <div class="field">
                                 <label for="trialSpeaker">Trial speaker</label>
                                 <select id="trialSpeaker"></select>
                             </div>
-                            <div class="field">
-                                <label for="trialFile">Trial utterance</label>
-                                <select id="trialFile"></select>
-                            </div>
+                        </div>
+
+                        <div class="field">
+                            <label for="trialFile">Trial utterance</label>
+                            <select id="trialFile"></select>
                         </div>
 
                         <div class="button-row">
@@ -476,7 +480,7 @@
             <article class="panel">
                 <div class="panel-head">
                     <h2>Verification result</h2>
-                    <p>The decision uses the target model score minus the UBM score. Anything above the threshold is
+                    <p>The decision uses the selected model score and the threshold. Anything above the threshold is
                         marked verified.</p>
                 </div>
                 <div class="panel-body">
@@ -533,6 +537,7 @@
             modelCount: document.getElementById('modelCount'),
             speakerCount: document.getElementById('speakerCount'),
             ubmStatus: document.getElementById('ubmStatus'),
+            modelType: document.getElementById('modelType'),
             targetSpeaker: document.getElementById('targetSpeaker'),
             trialSpeaker: document.getElementById('trialSpeaker'),
             trialFile: document.getElementById('trialFile'),
@@ -573,11 +578,24 @@
             items.forEach((item) => {
                 const option = document.createElement('option');
                 option.value = item.id;
-                option.textContent = `${item.label} (${item.fileCount} files)`;
+                option.textContent = item.fileCount !== undefined ? `${item.label} (${item.fileCount} files)` : item.label;
                 if (item.id === selectedId) {
                     option.selected = true;
                 }
                 selectEl.appendChild(option);
+            });
+        }
+
+        function populateModelFamilies(selectedId) {
+            elements.modelType.innerHTML = '';
+            catalog.modelFamilies.forEach((item) => {
+                const option = document.createElement('option');
+                option.value = item.id;
+                option.textContent = `${item.label}${item.available ? '' : ' (unavailable)'}`;
+                if (item.id === selectedId) {
+                    option.selected = true;
+                }
+                elements.modelType.appendChild(option);
             });
         }
 
@@ -604,9 +622,10 @@
         }
 
         function updateSelectionPreview() {
+            const modelLabel = catalog.modelFamilies.find((item) => item.id === elements.modelType.value)?.label || elements.modelType.value || '-';
             const targetSpeaker = elements.targetSpeaker.value || '-';
             const trialPath = elements.trialFile.value || '-';
-            elements.selectedModelText.textContent = targetSpeaker;
+            elements.selectedModelText.textContent = `${modelLabel} / ${targetSpeaker}`;
             elements.selectedFileText.textContent = trialPath;
         }
 
@@ -643,6 +662,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
+                        model_type: elements.modelType.value,
                         target_speaker: elements.targetSpeaker.value,
                         trial_path: elements.trialFile.value,
                         threshold: Number(elements.threshold.value),
@@ -667,7 +687,7 @@
                 elements.trialValue.textContent = payload.trialSpeaker;
                 elements.frameValue.textContent = String(payload.frameCount);
                 elements.durationValue.textContent = `${Number(payload.durationSec).toFixed(2)} s`;
-                elements.detailValue.textContent = `Target model ${payload.modelPath} scored ${score.toFixed(4)} against the UBM baseline.`;
+                elements.detailValue.textContent = `${payload.modelLabel || payload.modelType} scored ${score.toFixed(4)} on ${payload.trialPath}. Backend: ${payload.modelPath}.`;
             } catch (error) {
                 showError(error.message || String(error));
             } finally {
@@ -678,6 +698,7 @@
 
         function resetDefaults() {
             if (!catalog) return;
+            populateModelFamilies(catalog.defaultModelType);
             populateSelect(elements.targetSpeaker, catalog.targetSpeakers, catalog.defaultTargetSpeaker);
             populateSelect(elements.trialSpeaker, catalog.trialSpeakers, catalog.defaultTrialSpeaker);
             elements.threshold.value = catalog.defaultThreshold.toFixed(3);
@@ -694,12 +715,14 @@
             elements.speakerCount.textContent = catalog.speakerCount;
             elements.ubmStatus.textContent = catalog.ubmReady ? 'Ready' : 'Missing';
 
+            populateModelFamilies(catalog.defaultModelType);
             populateSelect(elements.targetSpeaker, catalog.targetSpeakers, catalog.defaultTargetSpeaker);
             populateSelect(elements.trialSpeaker, catalog.trialSpeakers, catalog.defaultTrialSpeaker);
             elements.threshold.value = catalog.defaultThreshold.toFixed(3);
             populateTrialFiles(elements.trialSpeaker.value, catalog.filesBySpeaker[elements.trialSpeaker.value]?.[0] || '');
             resetResultPanel();
 
+            elements.modelType.addEventListener('change', updateSelectionPreview);
             elements.targetSpeaker.addEventListener('change', updateSelectionPreview);
             elements.trialSpeaker.addEventListener('change', () => {
                 populateTrialFiles(elements.trialSpeaker.value, catalog.filesBySpeaker[elements.trialSpeaker.value]?.[0] || '');

@@ -13,6 +13,7 @@ path_to_src = str(path_to_src)
 sys.path.append(path_to_src)
 
 from src.features import extract_mfcc_features
+from src.gmm_ubm import UBMModel, map_adapt
 
 TIMIT_ROOT = Path("data") / "raw_timit" / "data"
 LISTS_DIR = Path("data") / "lists"
@@ -22,8 +23,9 @@ def enroll_speakers():
     model_path = OUT_DIR / "models" / "ubm_model.pkl"
 
 
-    ubm = joblib.load(model_path)
-    print(f"Loaded ubm with {ubm.n_components} components")
+    ubm_gmm = joblib.load(model_path)
+    ubm = UBMModel(gmm=ubm_gmm)
+    print(f"Loaded ubm with {ubm.gmm.n_components} components")
 
     list_path = LISTS_DIR / "test_enrollment_list.txt"
     with open(list_path, 'r')as f:  
@@ -46,11 +48,7 @@ def enroll_speakers():
     
         x_enroll = np.vstack(speaker_features)
 
-        target_gmm = copy.deepcopy(ubm)
-        target_gmm.warm_start = True
-        target_gmm.max_iter = 3
-
-        target_gmm.fit(x_enroll)
+        target_model = map_adapt(ubm, x_enroll, relevance_factor=16.0)
 
         clean_id = Path(speaker_id).name
         speaker_model_path = OUT_DIR / "enrolled_models"
@@ -58,7 +56,7 @@ def enroll_speakers():
         speaker_model_path.mkdir(exist_ok=True, parents=True)
 
         with open(model_file_path, 'wb') as f:
-            pkl.dump(target_gmm, f)
+            pkl.dump(target_model.gmm, f)
 
         print(f"Enrolled Speaker: {clean_id} | Frames: {x_enroll.shape[0]}")
 
