@@ -8,9 +8,12 @@ Both systems are evaluated on the same test enrollment list with the same
 trial protocol (enroll on first 3 utterances, test on the rest, all-vs-all).
 
 This script generates:
-  1. Overlaid DET curves
-  2. EER comparison bar chart
-  3. Score distribution panels (one per system)
+    1. Overlaid DET curves
+    2. EER comparison bar chart
+    3. Score distribution panels (one per system)
+    4. ROC comparison
+    5. FAR/FRR vs threshold panels
+    6. Score spread box plot
 """
 
 import sys
@@ -18,13 +21,11 @@ import pickle
 import random
 from pathlib import Path
 import numpy as np
-import librosa
 import joblib
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_curve
-from collections import defaultdict
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -34,10 +35,17 @@ from src.dsp_utils import extract_longest_word
 
 
 def compute_eer(y_true, y_scores):
-    fpr, tpr, _ = roc_curve(y_true, y_scores)
+    """Return EER and ROC-derived arrays used by diagnostic plots."""
+    fpr, tpr, thresholds = roc_curve(y_true, y_scores)
     fnr = 1 - tpr
     idx = np.nanargmin(np.abs(fnr - fpr))
-    return fpr[idx], fpr, fnr
+    eer = (fpr[idx] + fnr[idx]) / 2.0
+    return eer, fpr, fnr, thresholds, idx, tpr
+
+
+def save_fig(fig, out_path, dpi=170):
+    """Save figures with enough padding so long labels/titles are not clipped."""
+    fig.savefig(out_path, dpi=dpi, bbox_inches="tight", pad_inches=0.18)
 
 
 def parse_enrollment_list(list_path, n_enroll=3):
@@ -190,17 +198,17 @@ def main():
     # ---- GMM-UBM scores (wake-word <0.8s, matching 04_run_short_eval) ----
     print("Computing GMM-UBM scores (wake-word segments)...")
     gmm_true, gmm_scores = get_gmm_scores()
-    gmm_eer, gmm_fpr, gmm_fnr = compute_eer(gmm_true, gmm_scores)
+    gmm_eer, gmm_fpr, gmm_fnr, gmm_thr, gmm_eer_idx, gmm_tpr = compute_eer(gmm_true, gmm_scores)
     print(f"GMM-UBM  EER: {gmm_eer * 100:.2f}%  ({len(gmm_scores)} trials)")
 
     # ---- LSTM scores ----
     print("Computing LSTM scores...")
     lstm_true, lstm_scores = get_lstm_scores(enroll_by_spk, test_trials)
-    lstm_eer, lstm_fpr, lstm_fnr = compute_eer(lstm_true, lstm_scores)
+    lstm_eer, lstm_fpr, lstm_fnr, lstm_thr, lstm_eer_idx, lstm_tpr = compute_eer(lstm_true, lstm_scores)
     print(f"Bi-LSTM  EER: {lstm_eer * 100:.2f}%  ({len(lstm_scores)} trials)")
 
     # ===== PLOT 1: Overlaid DET curves =====
-    fig, ax = plt.subplots(figsize=(7, 7))
+    fig, ax = plt.subplots(figsize=(8, 7), constrained_layout=True)
     ax.plot(gmm_fpr * 100, gmm_fnr * 100, linewidth=2, color="blue",
             label=f"GMM-UBM (EER={gmm_eer*100:.2f}%)")
     ax.plot(lstm_fpr * 100, lstm_fnr * 100, linewidth=2, color="green",
@@ -215,12 +223,11 @@ def main():
     ax.set_ylim(0, 50)
     ax.legend(fontsize=11)
     ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(plots_dir / "comparison_det.png", dpi=150)
+    save_fig(fig, plots_dir / "comparison_det.png")
     plt.close(fig)
 
     # ===== PLOT 2: EER bar chart =====
-    fig, ax = plt.subplots(figsize=(5, 4))
+    fig, ax = plt.subplots(figsize=(8, 5), constrained_layout=True)
     systems = ["GMM-UBM", "Bi-LSTM"]
     eers = [gmm_eer * 100, lstm_eer * 100]
     colors = ["#4477AA", "#228833"]
@@ -229,15 +236,14 @@ def main():
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
                 f"{val:.2f}%", ha="center", va="bottom", fontweight="bold", fontsize=12)
     ax.set_ylabel("Equal Error Rate (%)", fontsize=12)
-    ax.set_title("EER Comparison: Short-Duration Speaker Verification", fontsize=13)
+    ax.set_title("EER Comparison\nShort-Duration Speaker Verification", fontsize=14)
     ax.set_ylim(0, max(eers) * 1.3)
     ax.grid(axis="y", alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(plots_dir / "comparison_eer_bar.png", dpi=150)
+    save_fig(fig, plots_dir / "comparison_eer_bar.png")
     plt.close(fig)
 
     # ===== PLOT 3: Score distributions side by side =====
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5), constrained_layout=True)
 
     for ax, (label, yt, ys, eer, color) in zip(axes, [
         ("GMM-UBM (LLR)", gmm_true, gmm_scores, gmm_eer, "blue"),
@@ -252,15 +258,89 @@ def main():
         ax.set_ylabel("Density")
         ax.legend()
 
-    fig.suptitle("Score Distributions: Genuine vs Impostor", fontsize=14, y=1.02)
-    fig.tight_layout()
-    fig.savefig(plots_dir / "comparison_score_dist.png", dpi=150, bbox_inches="tight")
+    fig.suptitle("Score Distributions: Genuine vs Impostor", fontsize=14)
+    save_fig(fig, plots_dir / "comparison_score_dist.png")
+    plt.close(fig)
+
+    # ===== PLOT 4: ROC curve comparison =====
+    fig, ax = plt.subplots(figsize=(8, 7), constrained_layout=True)
+    ax.plot(gmm_fpr * 100, gmm_tpr * 100, linewidth=2.2, color="#4477AA",
+            label=f"GMM-UBM (EER={gmm_eer*100:.2f}%)")
+    ax.plot(lstm_fpr * 100, lstm_tpr * 100, linewidth=2.2, color="#228833",
+            label=f"Bi-LSTM (EER={lstm_eer*100:.2f}%)")
+    ax.plot([0, 100], [0, 100], "k--", alpha=0.35, label="Chance")
+    ax.set_xlabel("False Acceptance Rate (%)", fontsize=12)
+    ax.set_ylabel("True Acceptance Rate (%)", fontsize=12)
+    ax.set_title("ROC Curve: GMM-UBM vs Bi-LSTM", fontsize=13)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=10)
+    save_fig(fig, plots_dir / "comparison_roc.png")
+    plt.close(fig)
+
+    # ===== PLOT 5: FAR/FRR vs threshold (operating-point view) =====
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
+
+    for ax, name, fpr, fnr, thr, eer_idx, color in [
+        (axes[0], "GMM-UBM", gmm_fpr, gmm_fnr, gmm_thr, gmm_eer_idx, "#4477AA"),
+        (axes[1], "Bi-LSTM", lstm_fpr, lstm_fnr, lstm_thr, lstm_eer_idx, "#228833"),
+    ]:
+        mask = np.isfinite(thr)
+        thr_fin = thr[mask]
+        far_fin = fpr[mask] * 100
+        frr_fin = fnr[mask] * 100
+        if len(thr_fin) == 0:
+            continue
+        order = np.argsort(thr_fin)
+        thr_fin = thr_fin[order]
+        far_fin = far_fin[order]
+        frr_fin = frr_fin[order]
+
+        ax.plot(thr_fin, far_fin, color="#CC3311", linewidth=2, label="FAR")
+        ax.plot(thr_fin, frr_fin, color=color, linewidth=2, label="FRR")
+        ax.axvline(thr[eer_idx], color="black", linestyle="--", alpha=0.6,
+                   label="EER threshold")
+        ax.set_title(f"{name}: FAR/FRR vs Threshold", fontsize=12)
+        ax.set_xlabel("Decision Threshold", fontsize=11)
+        ax.set_ylabel("Error Rate (%)", fontsize=11)
+        ax.grid(True, alpha=0.25)
+        ax.legend(fontsize=9)
+
+    save_fig(fig, plots_dir / "comparison_error_vs_threshold.png")
+    plt.close(fig)
+
+    # ===== PLOT 6: Score spread summary (box plots) =====
+    fig, ax = plt.subplots(figsize=(11, 5), constrained_layout=True)
+    box_data = [
+        gmm_scores[gmm_true == 1],
+        gmm_scores[gmm_true == 0],
+        lstm_scores[lstm_true == 1],
+        lstm_scores[lstm_true == 0],
+    ]
+    positions = [1, 2, 4, 5]
+    labels = ["GMM\nGenuine", "GMM\nImpostor", "LSTM\nGenuine", "LSTM\nImpostor"]
+    bplot = ax.boxplot(box_data, positions=positions, widths=0.65,
+                       patch_artist=True, showfliers=False)
+    box_colors = ["#88CCEE", "#EE8866", "#88CC88", "#EE8866"]
+    for patch, c in zip(bplot["boxes"], box_colors):
+        patch.set_facecolor(c)
+        patch.set_edgecolor("black")
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels, fontsize=10)
+    ax.set_ylabel("Score", fontsize=11)
+    ax.set_title("Score Spread by System and Trial Type", fontsize=13)
+    ax.grid(axis="y", alpha=0.25)
+    save_fig(fig, plots_dir / "comparison_score_boxplot.png")
     plt.close(fig)
 
     print(f"\nAll comparison plots saved to {plots_dir}/")
     print(f"  - comparison_det.png")
     print(f"  - comparison_eer_bar.png")
     print(f"  - comparison_score_dist.png")
+    print(f"  - comparison_roc.png")
+    print(f"  - comparison_error_vs_threshold.png")
+    print(f"  - comparison_score_boxplot.png")
 
 
 if __name__ == "__main__":
