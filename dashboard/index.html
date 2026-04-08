@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Speaker Verification Dashboard</title>
+    <style>
+        :root {
+            --bg: #08111f;
+            --panel: rgba(12, 20, 34, 0.84);
+            --panel-soft: rgba(18, 29, 49, 0.82);
+            --line: rgba(255, 255, 255, 0.08);
+            --text: #edf2ff;
+            --muted: #9db0ce;
+            --accent: #45d6c8;
+            --accent-2: #ffd166;
+            --danger: #ff6b6b;
+            --success: #40c057;
+            --shadow: 0 22px 60px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            color: var(--text);
+            font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+            background:
+                radial-gradient(circle at 15% 20%, rgba(69, 214, 200, 0.14), transparent 28%),
+                radial-gradient(circle at 85% 15%, rgba(255, 209, 102, 0.12), transparent 24%),
+                linear-gradient(135deg, #06101c 0%, #091728 52%, #050b13 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            opacity: 0.25;
+        }
+
+        .shell {
+            position: relative;
+            max-width: 1380px;
+            margin: 0 auto;
+            padding: 30px 22px 40px;
+        }
+
+        .hero {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 24px;
+            margin-bottom: 22px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.03);
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-size: 12px;
+        }
+
+        h1 {
+            margin: 14px 0 10px;
+            font-size: clamp(2.1rem, 4vw, 4.3rem);
+            line-height: 0.98;
+            letter-spacing: -0.05em;
+        }
+
+        .subtitle {
+            max-width: 760px;
+            margin: 0;
+            color: var(--muted);
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(110px, 1fr));
+            gap: 12px;
+            min-width: min(420px, 100%);
+        }
+
+        .stat {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 16px 18px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(16px);
+        }
+
+        .stat span {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 10px;
+        }
+
+        .stat strong {
+            font-size: 1.8rem;
+            line-height: 1;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1.1fr 0.9fr;
+            gap: 18px;
+            align-items: start;
+        }
+
+        .panel {
+            border: 1px solid var(--line);
+            border-radius: 26px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(18px);
+            overflow: hidden;
+        }
+
+        .panel-head {
+            padding: 18px 22px;
+            border-bottom: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+        }
+
+        .panel-head h2 {
+            margin: 0 0 8px;
+            font-size: 1.1rem;
+        }
+
+        .panel-head p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.94rem;
+            line-height: 1.5;
+        }
+
+        .panel-body {
+            padding: 22px;
+        }
+
+        .controls {
+            display: grid;
+            gap: 16px;
+        }
+
+        .field {
+            display: grid;
+            gap: 8px;
+        }
+
+        .field label {
+            color: var(--muted);
+            font-size: 0.84rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        select,
+        input[type="number"] {
+            width: 100%;
+            padding: 13px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: var(--panel-soft);
+            color: var(--text);
+            outline: none;
+            font: inherit;
+        }
+
+        select:focus,
+        input[type="number"]:focus {
+            border-color: rgba(69, 214, 200, 0.6);
+            box-shadow: 0 0 0 3px rgba(69, 214, 200, 0.15);
+        }
+
+        .row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 4px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 999px;
+            padding: 13px 18px;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .primary {
+            color: #03151f;
+            background: linear-gradient(135deg, var(--accent), #96f2d7);
+            box-shadow: 0 16px 36px rgba(69, 214, 200, 0.26);
+        }
+
+        .ghost {
+            color: var(--text);
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--line);
+        }
+
+        .audio-shell {
+            margin-top: 18px;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 16px;
+        }
+
+        .audio-shell audio {
+            width: 100%;
+            outline: none;
+        }
+
+        .meta {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .meta-card {
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .meta-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 8px;
+        }
+
+        .meta-card strong {
+            display: block;
+            word-break: break-word;
+            line-height: 1.45;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            margin-bottom: 18px;
+        }
+
+        .status::before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            background: currentColor;
+        }
+
+        .status.verified {
+            color: var(--success);
+            background: rgba(64, 192, 87, 0.12);
+            border: 1px solid rgba(64, 192, 87, 0.28);
+        }
+
+        .status.rejected {
+            color: var(--danger);
+            background: rgba(255, 107, 107, 0.12);
+            border: 1px solid rgba(255, 107, 107, 0.28);
+        }
+
+        .decision-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 8px;
+        }
+
+        .decision-card {
+            border-radius: 20px;
+            padding: 18px;
+            border: 1px solid var(--line);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+        }
+
+        .decision-card span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 10px;
+        }
+
+        .decision-card strong {
+            font-size: 1.4rem;
+            line-height: 1.1;
+            word-break: break-word;
+        }
+
+        .footnote {
+            margin-top: 14px;
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.6;
+        }
+
+        .error {
+            margin-top: 14px;
+            padding: 14px 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(255, 107, 107, 0.25);
+            background: rgba(255, 107, 107, 0.08);
+            color: #ffc9c9;
+            display: none;
+            white-space: pre-wrap;
+        }
+
+        @media (max-width: 1050px) {
+
+            .hero,
+            .grid {
+                grid-template-columns: 1fr;
+                display: grid;
+            }
+
+            .stats {
+                min-width: 0;
+            }
+        }
+
+        @media (max-width: 740px) {
+            .shell {
+                padding: 18px 14px 28px;
+            }
+
+            .row,
+            .meta,
+            .decision-grid,
+            .stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="shell">
+        <section class="hero">
+            <div>
+                <div class="eyebrow">TIMIT speaker verification</div>
+                <h1>Playback a dataset utterance, then verify it against a speaker model.</h1>
+                <p class="subtitle">
+                    Select a target speaker model from the enrolled TIMIT speakers, pick a test recording from the
+                    dataset itself,
+                    and run a GMM-UBM verification decision without using any external audio.
+                </p>
+            </div>
+
+            <div class="stats">
+                <div class="stat">
+                    <span>Available models</span>
+                    <strong id="modelCount">0</strong>
+                </div>
+                <div class="stat">
+                    <span>Trial speakers</span>
+                    <strong id="speakerCount">0</strong>
+                </div>
+                <div class="stat">
+                    <span>UBM status</span>
+                    <strong id="ubmStatus">Checking</strong>
+                </div>
+            </div>
+        </section>
+
+        <section class="grid">
+            <article class="panel">
+                <div class="panel-head">
+                    <h2>Verification controls</h2>
+                    <p>Choose the enrolled speaker model and a TIMIT file from the dataset tree, then verify the
+                        selected utterance.</p>
+                </div>
+                <div class="panel-body">
+                    <div class="controls">
+                        <div class="row">
+                            <div class="field">
+                                <label for="targetSpeaker">Target speaker model</label>
+                                <select id="targetSpeaker"></select>
+                            </div>
+                            <div class="field">
+                                <label for="threshold">Decision threshold</label>
+                                <input id="threshold" type="number" step="0.001" value="0.000" />
+                            </div>
+                        </div>
+
+                        <div class="row">
+                            <div class="field">
+                                <label for="trialSpeaker">Trial speaker</label>
+                                <select id="trialSpeaker"></select>
+                            </div>
+                            <div class="field">
+                                <label for="trialFile">Trial utterance</label>
+                                <select id="trialFile"></select>
+                            </div>
+                        </div>
+
+                        <div class="button-row">
+                            <button class="primary" id="verifyButton">Verify recording</button>
+                            <button class="ghost" id="resetButton" type="button">Reset to defaults</button>
+                        </div>
+                    </div>
+
+                    <div class="audio-shell">
+                        <audio id="audioPlayer" controls></audio>
+                    </div>
+
+                    <div class="meta">
+                        <div class="meta-card">
+                            <span>Selected model</span>
+                            <strong id="selectedModelText">-</strong>
+                        </div>
+                        <div class="meta-card">
+                            <span>Selected file</span>
+                            <strong id="selectedFileText">-</strong>
+                        </div>
+                    </div>
+
+                    <div class="error" id="errorBox"></div>
+                </div>
+            </article>
+
+            <article class="panel">
+                <div class="panel-head">
+                    <h2>Verification result</h2>
+                    <p>The decision uses the target model score minus the UBM score. Anything above the threshold is
+                        marked verified.</p>
+                </div>
+                <div class="panel-body">
+                    <div class="status rejected" id="statusBadge">No decision yet</div>
+
+                    <div class="decision-grid">
+                        <div class="decision-card">
+                            <span>Score</span>
+                            <strong id="scoreValue">-</strong>
+                        </div>
+                        <div class="decision-card">
+                            <span>Threshold</span>
+                            <strong id="thresholdValue">-</strong>
+                        </div>
+                        <div class="decision-card">
+                            <span>Trial type</span>
+                            <strong id="groundTruthValue">-</strong>
+                        </div>
+                        <div class="decision-card">
+                            <span>Decision rule</span>
+                            <strong id="ruleValue">score &gt;= threshold</strong>
+                        </div>
+                    </div>
+
+                    <div class="meta" style="margin-top: 14px;">
+                        <div class="meta-card">
+                            <span>Target speaker</span>
+                            <strong id="targetValue">-</strong>
+                        </div>
+                        <div class="meta-card">
+                            <span>Trial speaker</span>
+                            <strong id="trialValue">-</strong>
+                        </div>
+                        <div class="meta-card">
+                            <span>Frames used</span>
+                            <strong id="frameValue">-</strong>
+                        </div>
+                        <div class="meta-card">
+                            <span>Duration</span>
+                            <strong id="durationValue">-</strong>
+                        </div>
+                    </div>
+
+                    <div class="footnote" id="detailValue">
+                        Select a speaker model and a recording, then press Verify recording.
+                    </div>
+                </div>
+            </article>
+        </section>
+    </div>
+
+    <script>
+        const elements = {
+            modelCount: document.getElementById('modelCount'),
+            speakerCount: document.getElementById('speakerCount'),
+            ubmStatus: document.getElementById('ubmStatus'),
+            targetSpeaker: document.getElementById('targetSpeaker'),
+            trialSpeaker: document.getElementById('trialSpeaker'),
+            trialFile: document.getElementById('trialFile'),
+            threshold: document.getElementById('threshold'),
+            verifyButton: document.getElementById('verifyButton'),
+            resetButton: document.getElementById('resetButton'),
+            audioPlayer: document.getElementById('audioPlayer'),
+            selectedModelText: document.getElementById('selectedModelText'),
+            selectedFileText: document.getElementById('selectedFileText'),
+            statusBadge: document.getElementById('statusBadge'),
+            scoreValue: document.getElementById('scoreValue'),
+            thresholdValue: document.getElementById('thresholdValue'),
+            groundTruthValue: document.getElementById('groundTruthValue'),
+            ruleValue: document.getElementById('ruleValue'),
+            targetValue: document.getElementById('targetValue'),
+            trialValue: document.getElementById('trialValue'),
+            frameValue: document.getElementById('frameValue'),
+            durationValue: document.getElementById('durationValue'),
+            detailValue: document.getElementById('detailValue'),
+            errorBox: document.getElementById('errorBox'),
+        };
+
+        let catalog = null;
+
+        function showError(message) {
+            elements.errorBox.textContent = message;
+            elements.errorBox.style.display = message ? 'block' : 'none';
+        }
+
+        function updateStatus(text, verified) {
+            elements.statusBadge.textContent = text;
+            elements.statusBadge.classList.toggle('verified', verified === true);
+            elements.statusBadge.classList.toggle('rejected', verified !== true);
+        }
+
+        function populateSelect(selectEl, items, selectedId) {
+            selectEl.innerHTML = '';
+            items.forEach((item) => {
+                const option = document.createElement('option');
+                option.value = item.id;
+                option.textContent = `${item.label} (${item.fileCount} files)`;
+                if (item.id === selectedId) {
+                    option.selected = true;
+                }
+                selectEl.appendChild(option);
+            });
+        }
+
+        function populateTrialFiles(speakerId, selectedPath) {
+            const files = (catalog.filesBySpeaker[speakerId] || []).slice();
+            elements.trialFile.innerHTML = '';
+            files.forEach((path) => {
+                const option = document.createElement('option');
+                option.value = path;
+                option.textContent = path.split('/').slice(-2).join(' / ');
+                if (path === selectedPath) {
+                    option.selected = true;
+                }
+                elements.trialFile.appendChild(option);
+            });
+            if (files.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'No files available';
+                elements.trialFile.appendChild(option);
+            }
+            updateAudio();
+            updateSelectionPreview();
+        }
+
+        function updateSelectionPreview() {
+            const targetSpeaker = elements.targetSpeaker.value || '-';
+            const trialPath = elements.trialFile.value || '-';
+            elements.selectedModelText.textContent = targetSpeaker;
+            elements.selectedFileText.textContent = trialPath;
+        }
+
+        function updateAudio() {
+            const trialPath = elements.trialFile.value;
+            if (!trialPath) {
+                elements.audioPlayer.removeAttribute('src');
+                elements.audioPlayer.load();
+                return;
+            }
+            elements.audioPlayer.src = `/audio?path=${encodeURIComponent(trialPath)}`;
+        }
+
+        function resetResultPanel() {
+            updateStatus('No decision yet', false);
+            elements.scoreValue.textContent = '-';
+            elements.thresholdValue.textContent = '-';
+            elements.groundTruthValue.textContent = '-';
+            elements.ruleValue.textContent = 'score >= threshold';
+            elements.targetValue.textContent = '-';
+            elements.trialValue.textContent = '-';
+            elements.frameValue.textContent = '-';
+            elements.durationValue.textContent = '-';
+            elements.detailValue.textContent = 'Select a speaker model and a recording, then press Verify recording.';
+        }
+
+        async function verifySelection() {
+            showError('');
+            elements.verifyButton.disabled = true;
+            elements.verifyButton.textContent = 'Verifying...';
+
+            try {
+                const response = await fetch('/api/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target_speaker: elements.targetSpeaker.value,
+                        trial_path: elements.trialFile.value,
+                        threshold: Number(elements.threshold.value),
+                    }),
+                });
+
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || 'Verification failed');
+                }
+
+                const score = Number(payload.score);
+                const threshold = Number(payload.threshold);
+                const verified = Boolean(payload.verified);
+
+                updateStatus(verified ? 'Verified' : 'Not verified', verified);
+                elements.scoreValue.textContent = score.toFixed(4);
+                elements.thresholdValue.textContent = threshold.toFixed(4);
+                elements.groundTruthValue.textContent = payload.groundTruth;
+                elements.ruleValue.textContent = payload.decisionRule;
+                elements.targetValue.textContent = payload.targetSpeaker;
+                elements.trialValue.textContent = payload.trialSpeaker;
+                elements.frameValue.textContent = String(payload.frameCount);
+                elements.durationValue.textContent = `${Number(payload.durationSec).toFixed(2)} s`;
+                elements.detailValue.textContent = `Target model ${payload.modelPath} scored ${score.toFixed(4)} against the UBM baseline.`;
+            } catch (error) {
+                showError(error.message || String(error));
+            } finally {
+                elements.verifyButton.disabled = false;
+                elements.verifyButton.textContent = 'Verify recording';
+            }
+        }
+
+        function resetDefaults() {
+            if (!catalog) return;
+            populateSelect(elements.targetSpeaker, catalog.targetSpeakers, catalog.defaultTargetSpeaker);
+            populateSelect(elements.trialSpeaker, catalog.trialSpeakers, catalog.defaultTrialSpeaker);
+            elements.threshold.value = catalog.defaultThreshold.toFixed(3);
+            populateTrialFiles(elements.trialSpeaker.value, catalog.filesBySpeaker[elements.trialSpeaker.value]?.[0] || '');
+            resetResultPanel();
+            updateSelectionPreview();
+        }
+
+        async function init() {
+            const response = await fetch('/api/catalog');
+            catalog = await response.json();
+
+            elements.modelCount.textContent = catalog.modelCount;
+            elements.speakerCount.textContent = catalog.speakerCount;
+            elements.ubmStatus.textContent = catalog.ubmReady ? 'Ready' : 'Missing';
+
+            populateSelect(elements.targetSpeaker, catalog.targetSpeakers, catalog.defaultTargetSpeaker);
+            populateSelect(elements.trialSpeaker, catalog.trialSpeakers, catalog.defaultTrialSpeaker);
+            elements.threshold.value = catalog.defaultThreshold.toFixed(3);
+            populateTrialFiles(elements.trialSpeaker.value, catalog.filesBySpeaker[elements.trialSpeaker.value]?.[0] || '');
+            resetResultPanel();
+
+            elements.targetSpeaker.addEventListener('change', updateSelectionPreview);
+            elements.trialSpeaker.addEventListener('change', () => {
+                populateTrialFiles(elements.trialSpeaker.value, catalog.filesBySpeaker[elements.trialSpeaker.value]?.[0] || '');
+            });
+            elements.trialFile.addEventListener('change', () => {
+                updateAudio();
+                updateSelectionPreview();
+            });
+            elements.verifyButton.addEventListener('click', verifySelection);
+            elements.resetButton.addEventListener('click', resetDefaults);
+
+            updateSelectionPreview();
+        }
+
+        init().catch((error) => {
+            showError(error.message || String(error));
+            elements.ubmStatus.textContent = 'Error';
+        });
+    </script>
+</body>
+
+</html>

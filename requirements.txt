@@ -3,3 +3,5 @@ scikit-learn
 soundfile
 numpy
 matplotlib
+fastapi
+uvicorn

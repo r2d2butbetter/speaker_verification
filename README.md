@@ -250,6 +250,22 @@ python test_dsp.py
 python test_ubm.py
 ```
 
+### Local verification dashboard
+
+Run the dashboard from the repository root:
+
+```bash
+python dashboard/app.py
+```
+
+Then open `http://127.0.0.1:8000` in your browser.
+
+The dashboard lets you:
+- choose an enrolled speaker model from `results/enrolled_models/`
+- choose a speech file from `data/raw_timit/data/TEST/`
+- play the selected audio inside the page
+- verify the recording with a configurable threshold
+
 ---
 
 ## 9) Known Caveats in Current Setup
