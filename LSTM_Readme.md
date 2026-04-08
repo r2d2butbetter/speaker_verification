@@ -66,6 +66,17 @@ Current training settings from `lstm/train.py`:
 - Batch size: 32
 - Gradient clipping: `max_norm=5.0`
 
+Why each setting is used:
+
+- `margin=1.0` in triplet loss sets a clear separation target between positive and negative pairs without making optimization too brittle.
+- `p=2` uses Euclidean distance, matching common metric-learning practice for embedding spaces.
+- Adam with `lr=1e-3` gives stable early convergence for recurrent networks.
+- `weight_decay=1e-5` adds light regularization to reduce overfitting.
+- `StepLR(step_size=4, gamma=0.5)` decays learning rate every 4 epochs so training starts fast, then fine-tunes with smaller updates.
+- `epochs=25` provides enough passes for convergence in this setup while keeping training time practical.
+- `batch_size=32` balances gradient stability and memory use.
+- `max_norm=5.0` prevents exploding gradients in LSTM backpropagation.
+
 Per-utterance normalization is applied in the training loop before model forward pass:
 
 `x_norm = (x - mean_time) / (std_time + 1e-6)`
@@ -84,6 +95,10 @@ This produces embeddings that generalize better to unseen speakers.
 ### Why 1.5-second random chunks during training?
 
 Short chunks regularize the model for short-utterance verification and increase sample diversity through random segment selection.
+
+### Why not 0.5-second chunks?
+
+0.5 seconds is usually too short to provide enough stable speaker evidence (especially across varying phonetic content). 1.5 seconds is a practical compromise: short enough to train for short-utterance use cases, but long enough to retain consistent speaker traits.
 
 ### Why gradient clipping?
 
@@ -159,3 +174,27 @@ Evaluation prints trial count and EER to console.
 - A dedicated validation protocol per epoch would make model selection more reliable.
 
 Even with these limits, the current design is a strong baseline for short-utterance speaker verification because it combines temporal modeling (BiLSTM), frame importance learning (attention), and verification-oriented metric learning (triplet loss).
+
+## 11. Clarification on the "0.5 rate"
+
+The `0.5` value in training is the learning-rate decay factor (`gamma=0.5`) in `StepLR`, not a 0.5-second audio duration.
+
+- Duration used for training chunks: `chunk_length_sec=1.5`.
+- Meaning of `gamma=0.5`: every scheduler step, LR becomes half of the previous value.
+- Example with `step_size=4`: after epoch 4, LR goes from `1e-3` to `5e-4`; after epoch 8, to `2.5e-4`, and so on.
+
+So to be explicit: we are **not** training the LSTM on 0.5-second speech segments. We train on 1.5-second random chunks, and only the optimizer learning rate is multiplied by 0.5 at scheduler steps.
+
+## 12. Why Only DET, EER Bar, and ROC Are Kept in Comparison Plots
+
+In `scripts/05_compare_systems.py`, we keep only three summary plots:
+
+- **DET curve**: best visualization of verification trade-off (FAR vs FRR) at all thresholds.
+- **EER bar chart**: fastest single-number comparison between systems.
+- **ROC curve**: complementary ranking-quality view (TPR vs FPR).
+
+Why the others were dropped:
+
+- Score histograms, threshold-sweep curves, and box plots are useful for deep debugging, but they are redundant for the final model comparison story.
+- Keeping only DET + EER + ROC makes the report cleaner while still showing that LSTM outperforms GMM-UBM from multiple angles.
+- Fewer plots reduce visual clutter and make the main conclusion easier to communicate.
